@@ -1,0 +1,361 @@
+% % Patient effort timing finding
+
+clear all; close all;
+load('Struct_P5D2.mat') % P4
+
+Async_Breath = 1:2000;
+Bn = 1; % 1500; % No of breath to be plotted
+for i = 1:Bn
+    BN(:,i) = Async_Breath(1,i+20 ); % add breaths to check next set %% Async_Breath(1,i+1000) 1tth breath ideal p2: 16,30,70 - P4: 1800, 800 - P9: 1 -  P5: 1
+    Paw(:,i) = struct(BN(:,i)).BreathNormal(:,2);
+    Qaw(:,i) = struct(BN(:,i)).BreathNormal(:,1);
+    V(:,i) = struct(BN(:,i)).BreathNormal(:,3); 
+    time(:,i) = struct(BN(:,i)).BreathNormal(:,4);
+end
+
+% Linear regression
+for i = 1: size(V,2)
+    ParamN(:,i) = [V(:,i) Qaw(:,i)]\(Paw(:,i)-min(Paw(:,i)));
+    P_Cal(:,i) = ParamN(1,i)*V(:,i) + ParamN(2,i)*Qaw(:,i) + min(Paw(:,i));
+end
+
+
+% Find P_effort timings
+        nos = size(Paw,2);
+        for i = 1:nos
+            t(:,i) = linspace(1,51,51)'; 
+            area = []; zone = []; Area_Find = [];
+            timing(:,i) = P_Cal(:,i) > Paw(:,i);
+            zone = find([false;timing(:,i)]~=[timing(:,i);false]);
+            a = NaN(1,size(zone,1));
+            for a = [1:2:size(zone,1)]
+                if zone(a,1) == zone(a+1,1)-1
+                    area(:,a) = 1;
+                else
+                    area(:,a) = abs( trapz(Paw( zone(a,1):zone(a+1,1)-1 ,i)) - trapz (P_Cal( zone(a,1):zone(a+1,1)-1 ,i)) );
+                    % Check presence of effort
+                    Area_Find(:,a) = (abs( trapz(Paw( zone(a,1):zone(a+1,1)-1 ,i)) - trapz (P_Cal( zone(a,1):zone(a+1,1)-1 ,i)) ) ./ trapz (P_Cal( zone(a,1):zone(a+1,1)-1 ,i)) ) * 100;
+                   end
+            end
+            area = nonzeros(area')'; 
+            [q, r] = max(area);
+            % Comparing with threshold
+            Area_Find = nonzeros(Area_Find')';
+            if max(Area_Find) >= 5%
+                Asynchronous(:,i) = 1 ;
+            else
+                Asynchronous(:,i) = 0 ;
+            end                
+
+            % effort start and finish timings
+            if isempty(zone)
+                    continue
+            else
+
+            if (r*2+1) <= size(zone,1) %r == 1
+                [Pmax_before(:,i) id_peak(:,i)] = max(Paw(1:zone(r*2-1),i));
+                tso(:,i) = t(id_peak(:,i),i);        
+                [Pmax_after(:,i) maxid(:,i)]  = max( Paw(zone(r*2)-1:zone(r*2+1),i));
+                tfo(:,i) = t(maxid(:,i)-1+zone(r*2)-1,i);                
+            else                
+                [Pmax_before(:,i) id_peak(:,i)] = max(Paw(1:zone(r*2-1),i)); % (zone(r*2-2)
+                tso(:,i) = t(id_peak(:,i),i);
+                [Pmax_after(:,i) maxid(:,i)]  = max( Paw(zone(r*2)-1:end,i)); % zone(r*2+1)
+                tfo(:,i) = t(maxid(:,i)-1+zone(r*2)-1,i);
+            end
+            end
+        end
+
+for i = 1 : size(V,2)
+       if  Asynchronous(:,i) == 1 
+            Peffort = Paw(tso(:,i):tfo(:,i),i);
+            Peff_norm =((- min(Peffort) + Peffort )./  (+max(Peffort)-min(Peffort))) -1;
+            te = (1:size(Peffort,1))';
+            x = Peff_norm; pos= 1;  %     mu = mean(Peff_norm); sigma = std(Peff_norm);  
+            Pstr(i,:) = max(Paw(tso(:,i):tfo(:,i),i)) - min(Paw(tso(:,i):tfo(:,i),i));
+            w = - [Pstr Pstr/4 Pstr];
+
+            CA(i,:)= [w(1)  pos(1) w(2) w(3) pos(1)];
+
+            fpaw = @(c) c(1)*exp(-1*((x+c(2)).^2))+  c(3)*exp(-1*((x).^2)) + c(4)*exp(-1*((x-c(5)).^2))- Peff_norm;
+            [C2(i,:), SSE_Gauss]= lsqnonlin(fpaw, [0 0 0 0 0], [-100 -100 -100 -100 -100], [100 100 100 100 100] );
+            y2 =  C2(i,1)*exp(-1*((x+C2(i,2)).^2))+  C2(i,3)*exp(-1*((x).^2)) + C2(i,4)*exp(-1*((x-C2(i,5)).^2));
+
+        %% Fitting entire inspiration pressure
+
+            phi1 = exp(-1*((x+C2(i,2)).^2));
+            phi2 = exp(-1*((x).^2)); 
+            phi3 = exp(-1*((x-C2(i,2)).^2));
+
+            P = Paw(:,i); v = V(:,i); Q = Qaw(:,i); PEEP = min(Paw(:,i));
+            phi_1 = zeros(size(P)); phi_2 = zeros(size(P)); phi_3 = zeros(size(P));
+            phi_1(tso(:,i):tfo(:,i),1) = phi1;
+            phi_2(tso(:,i):tfo(:,i),1) = phi2;
+            phi_3(tso(:,i):tfo(:,i),1) = phi3;
+
+            % Defining function Paw = EV +RQ + PEEP  + w1phi1 +w2phi2 + w3phi3
+
+%             fpaw = @(c) c(1)* v + c(2)*Q + c(3) + c(4)*phi_1+ c(5)*phi_2+ c(6)*phi_3 - P;
+%             [C_lsq_nolim(i,:), SSE]= lsqnonlin(fpaw, [0 0 0 0 0 0], [-30 -10 -30 -30 -30 -30], [100 50 30 30 30 30] );
+%             PawM_lsq_nolim(:,i) =  C_lsq_nolim(i,1)* v + C_lsq_nolim(i,2)*Q + C_lsq_nolim(i,3) + C_lsq_nolim(i,4)*phi_1+ C_lsq_nolim(i,5)*phi_2+ C_lsq_nolim(i,6)*phi_3;
+
+            fpaw = @(c) c(1)* v + c(2)*Q + min(Paw(:,i)) + c(3)*phi_1+ c(4)*phi_2+ c(5)*phi_3 - P;
+            [C_lsq_Old(i,:), SSE_Gauss]= lsqnonlin(fpaw, [0 0 0 0 0], [-100 -100 -Inf -Inf -Inf], [100 100 Inf Inf Inf]  );
+            PawM_lsq_Old(:,i) =  C_lsq_Old(i,1)* v + C_lsq_Old(i,2)*Q + min(Paw(:,i)) + C_lsq_Old(i,3)*phi_1+ C_lsq_Old(i,4)*phi_2+ C_lsq_Old(i,5)*phi_3;
+
+            Pstr_cal(i,:) = max(PawM_lsq_Old(tso(:,i):tfo(:,i),i)) - min(PawM_lsq_Old(tso(:,i):tfo(:,i),i));
+            
+            % Error Propagation
+              E_Gauss_Old(:,i) = C_lsq_Old(i,1);
+              R_Gauss_Old(:,i) = C_lsq_Old(i,2);
+
+%               %without effort
+%               PawM_lsq_noeffort(:,i) =  C_lsq_Old(i,1)* v + C_lsq_Old(i,2)*Q + min(Paw(:,i));
+%               Mag_Async(:,i) = abs( (trapz(PawM_lsq_noeffort(tso(:,i):tfo(:,i),i)) - trapz (Paw(tso(:,i):tfo(:,i),i))) *100./ trapz(PawM_lsq_noeffort(tso(:,i):tfo(:,i),i)) );
+              
+              % Fitting Error
+              Pgauss_Error_Old(:,i) = abs((Paw(:,i) - PawM_lsq_Old(:,i))*100./Paw(:,i));
+              % Fitting Error
+              Pcal_Error(:,i) = abs((Paw(:,i) - P_Cal(:,i))*100./Paw(:,i));  
+              
+              SSE_Gauss(i,:) = norm ( PawM_lsq_Old(:,i) - Paw(:,i)); SSE_scm(i,:) = norm ( P_Cal(:,i) - Paw(:,i));
+               Patient(i).SSE_Gauss = SSE_Gauss(i,:); Patient(i).SSE_Scm = SSE_scm(i,:);
+               Patient(i).Async = Asynchronous(:,i);
+               Patient(i).Egauss = C_lsq_Old(i,1); Patient(i).Rgauss = C_lsq_Old(i,2); Patient(i).Escm = ParamN(1,i); Patient(i).Rscm = ParamN(2,i) ;
+               Patient(i).A1 = C_lsq_Old(i,3); Patient(i).A2 = C_lsq_Old(i,4); Patient(i).A3 = C_lsq_Old(i,5); 
+               Patient(i).APEgauss = Pgauss_Error_Old(:,i);  
+               Patient(i).APEscm = Pcal_Error(:,i);
+               Patient(i).Paw = Paw(:,i); Patient(i).Pgauss =  PawM_lsq_Old(:,i); Patient(i).PCal = P_Cal(:,i);
+       else
+              % Fitting Error
+              Pgauss_Error_Old(:,i) = 0;
+              % Fitting Error
+              Pcal_Error(:,i) = abs((Paw(:,i) - P_Cal(:,i))*100./Paw(:,i));  
+%               break
+%               SSE_Gauss(i,:) = norm ( PawM_lsq_nolim(:,i) - Paw(:,i));  
+%               SSE_scm(i,:) = norm ( P_Cal(:,i) - Paw(:,i));
+       end       
+end
+
+
+%%
+% Pressure Reconstruction Model
+for i = 1:nos
+    Ptemp = Paw(:,i);
+%     Ite = 10; % no. of iterations
+    for n = 1:100
+      
+        A = [V(:,i) Qaw(:,i)]; 
+        B = (Ptemp(:,n) - min(Paw(:,i)));
+        temp = A\B;
+        Elast(n) = temp(1); 
+        Resist(n) = temp(2); % Values changes through the iterations
+        clear A B temp
+
+        TempPressure = Elast(n)*V(:,i)+ Resist(n)*Qaw(:,i) + min(Paw(:,i));
+        Ptemp(:,n+1) = max(Ptemp(:,n), TempPressure);        
+        clear TempPressure
+        Pm = max(Paw(:,i)); 
+        Pm = ones((size(t,1)),1) .* Pm;  
+%         aps = ( Pm(10:size(t,1),1) - Ptemp(10:size(t,1),n+1)) ./ Pm(10:size(t,1),1);
+        aps = norm(( Pm(10:size(t,1),1)- Ptemp(10:size(t,1),n+1)));
+        if aps  <= 2.5    % 0.01
+            break
+        end
+        
+    end
+        Prec(:,i) = Ptemp(:,n+1);
+        Param_Re(i,1) = Elast(n);
+        Param_Re(i,2) = Resist(n);        
+        Paw_reconst(:,i) =  Ptemp(:,end);
+        Patient(i).Erec =  Param_Re(i,1); Patient(i).Rrec =  Param_Re(i,2); Patient(i).Paw_reconst = Paw_reconst(:,i);
+        figure (1)
+        plot(time,Paw,'b-','linewidth', 2.0)
+        hold on
+        plot(time,Ptemp, 'r:','linewidth', 3.0)
+%         plot(time,TempPressure, 'k:','linewidth', 3.0)
+        xlabel('Time [s]','FontWeight','Bold','FontSize',16)
+        ylabel('Pressure [cmH_2O]','FontWeight','Bold','FontSize',16)
+        legend ('Original P_a_w','Reconstructed P_a_w','Location','southeast')
+        set(gca,'fontsize',14)
+        text = [ sprintf('  E_R_e_c = %0.0f,', Param_Re(i,1)) sprintf('  R_R_e_c = %0.0f,', Param_Re(i,2)) ];
+        title(text)
+
+end
+
+
+%%
+% % Collect result
+% 
+% SNo = linspace(1,size(Paw,2),size(Paw,2));
+% Table = [SNo', Asynchronous' median(Pgaussian_Error)' quantile(Pgaussian_Error,0.25)' quantile(Pgaussian_Error,0.75)' E_Gaussian' R_Gaussian' median(Pcal_Error)' quantile(Pcal_Error,0.25)' quantile(Pcal_Error,0.75)' ParamN(1,:)' ParamN(2,:)' Param_Re(:,1) Param_Re(:,2) Mag_Async' C_lsq_nolim(:,3) C_lsq_nolim(:,4) C_lsq_nolim(:,5) SSE_Gauss];
+% header = {'S.No' 'Asynchronous' 'Pgaussian_Error' 'Pgaussian_Error 0.25' 'Pgaussian_Error 0.75' 'E_Gaussian' 'R_Gaussian' 'Pscm_Error' 'Pscm_Error 0.25' 'Pscm_Error 0.75' 'E_SCM' 'R_SCM' 'E_recon' 'R_recon' 'Mag_Async' 'A1' 'A2' 'A3' 'SSE'};
+% Table_1 = [header; num2cell(Table)];
+
+
+%% Sinusoidal Model
+% KK = zeros(51,3); % for regression
+% td = tfo - tso;
+% 
+% for i=1:size(t)
+%     if t(i,1) <= tso
+%         Pe(i,1)=0;
+%     elseif (t(i,1) > tso && t(i,1) <= tfo)
+%         Pe(i,1)=Pstr*sin((pi./((td))*((tfo)-t(i,1))));
+%         KK(i,3) = sin((pi./((td))*((tfo)-t(i,1)))); % for regression
+%     elseif t(i,1) >= tfo
+%         Pe(i,1) = 0;
+%     end 
+% end
+
+%%
+
+for i = 1 : size(V,2)
+       if  Asynchronous(:,i) == 1 
+            Peffort = Paw(tso(:,i):tfo(:,i),i);
+            Peff_norm =((- min(Peffort) + Peffort )./  (+max(Peffort)-min(Peffort))) -1;
+            
+            te = (1:size(Peffort,1))';
+            
+            t_effort = time(tso:tfo);
+            mu = mean(t_effort); 
+            sigma = std(t_effort);            
+            x = linspace(-5*sigma, 5*sigma, size(t_effort,1))';            
+%             Pstr(i,:) = max(Paw(tso(:,i):tfo(:,i),i)) - min(Paw(tso(:,i):tfo(:,i),i));
+            w = - [Pstr Pstr/4 Pstr];
+
+            CA(i,:)= [w(1)  pos(1) w(2) w(3) pos(1)];
+            fpaw = @(c) c(1)*exp(-1*((x+c(2)).^2))+  c(3)*exp(-1*((x).^2)) + c(4)*exp(-1*((x-c(5)).^2))- Peff_norm;
+            [C2(i,:), SSE_Gauss]= lsqnonlin(fpaw, [0 0 0 0 0], [-100 -100 -100 -100 -100], [100 100 100 100 100] );
+            y2 =  C2(i,1)*exp(-1*((x+C2(i,2)).^2))+  C2(i,3)*exp(-1*((x).^2)) + C2(i,4)*exp(-1*((x-C2(i,5)).^2));
+
+        %% Fitting entire inspiration pressure
+
+            phi1 = exp(-1*((x+C2(i,2)).^2));
+            phi2 = exp(-1*((x).^2)); 
+            phi3 = exp(-1*((x-C2(i,2)).^2));
+
+            P = Paw(:,i); v = V(:,i); Q = Qaw(:,i); PEEP = min(Paw(:,i));
+            phi_1 = zeros(size(P)); phi_2 = zeros(size(P)); phi_3 = zeros(size(P));
+            phi_1(tso(:,i):tfo(:,i),1) = phi1;
+            phi_2(tso(:,i):tfo(:,i),1) = phi2;
+            phi_3(tso(:,i):tfo(:,i),1) = phi3;
+
+            % Defining function Paw = EV +RQ + PEEP  + w1phi1 +w2phi2 + w3phi3
+%             fpaw = @(c) c(1)* v + c(2)*Q + c(3) + c(4)*phi_1+ c(5)*phi_2+ c(6)*phi_3 - P;
+%             [C_lsq_nolim(i,:), SSE]= lsqnonlin(fpaw, [0 0 0 0 0 0], [-30 -10 -30 -30 -30 -30], [100 50 30 30 30 30] );
+%             PawM_lsq_nolim(:,i) =  C_lsq_nolim(i,1)* v + C_lsq_nolim(i,2)*Q + C_lsq_nolim(i,3) + C_lsq_nolim(i,4)*phi_1+ C_lsq_nolim(i,5)*phi_2+ C_lsq_nolim(i,6)*phi_3;
+
+            fpaw = @(c) c(1)* v + c(2)*Q + min(Paw(:,i)) + c(3)*phi_1+ c(4)*phi_2+ c(5)*phi_3 - P;
+            [C_lsq_New(i,:), SSE_Gauss]= lsqnonlin(fpaw, [0 0 0 0 0], [-100 -100 -Inf -Inf -Inf], [100 100 Inf Inf Inf]  );
+            PawM_lsq_New(:,i) =  C_lsq_New(i,1)* v + C_lsq_New(i,2)*Q + min(Paw(:,i)) + C_lsq_New(i,3)*phi_1+ C_lsq_New(i,4)*phi_2+ C_lsq_New(i,5)*phi_3;
+          
+            % Error Propagation
+              E_Gauss_New(:,i) = C_lsq_New(i,1);
+              R_Gauss_New(:,i) = C_lsq_New(i,2);
+
+              % Fitting Error
+              Pgauss_Error_New(:,i) = abs((Paw(:,i) - PawM_lsq_New(:,i))*100./Paw(:,i));
+              % Fitting Error
+              Pcal_Error(:,i) = abs((Paw(:,i) - P_Cal(:,i))*100./Paw(:,i));  
+              
+       else
+              % Fitting Error
+              Pgauss_Error_New(:,i) = 0;
+              % Fitting Error
+              Pcal_Error(:,i) = abs((Paw(:,i) - P_Cal(:,i))*100./Paw(:,i));  
+       end
+    A1(i,:) = C_lsq_New(i,1);
+    A2(i,:) = C_lsq_New(i,3);
+    A3(i,:) = C_lsq_New(i,4);
+    Mu(i,:) = C_lsq_New(i,2);
+end
+
+%%
+
+% Collect result
+% 
+SNo = linspace(1,size(Paw,2),size(Paw,2));
+% Table = [SNo', Asynchronous' median(Pgauss_Error_New)' quantile(Pgauss_Error_New,0.25)' quantile(Pgauss_Error_New,0.75)' E_Gauss_New' R_Gauss_New' median(Pcal_Error)' quantile(Pcal_Error,0.25)' quantile(Pcal_Error,0.75)' ParamN(1,:)' ParamN(2,:)' Param_Re(:,1) Param_Re(:,2) median(Pgauss_Error_Old)' quantile(Pgauss_Error_Old,0.25)' quantile(Pgauss_Error_Old,0.75)' E_Gauss_Old' R_Gauss_Old' ];
+% header = {'S.No' 'Asynchronous' 'Pg_Error' 'Pg_Error 0.25' 'Pg_Error 0.75' 'E_Gaussian' 'R_Gaussian' 'Pscm_Error' 'Pscm_Error 0.25' 'Pscm_Error 0.75' 'E_SCM' 'R_SCM' 'E_recon' 'R_recon' 'Pg_old' 'Pg_old 0.25' 'Pg_old 0.75' 'Pg_new' 'Pg_new 0.25' 'Pg_new 0.75' 'Eg_old' 'Rg_old' };
+% Table_1 = [header; num2cell(Table)];
+
+% Plots
+
+% for i = 1:Bn
+%     figure(2)
+%     hold on
+%     plot(time(:,i),Paw(:,i),'b+-','linewidth', 1.0)
+%     plot(time(:,i),P_Cal(:,i), 'r*-','linewidth', 1.0)
+%     plot(time(:,i),PawM_lsq_New(:,i), ':','linewidth', 3.0)
+%     plot(time(:,i),PawM_lsq_Old(:,i), ':','linewidth', 3.0)
+% 
+% %     plot(time(:,i),PawM_lsq_noeffort(:,i), '^-','linewidth', 1.0)
+% %     plot(time(:,i),Paw_reconst(:,i), ':','linewidth', 3.0)
+%     
+%     xlabel('Time [s]','FontWeight','Bold','FontSize',16)
+%     ylabel('Pressure [cmH_2O]','FontWeight','Bold','FontSize',16)
+%     set(gca,'fontsize',14)
+%     grid on
+%     plot(time(tso(:,i)),Paw(tso(:,i),i),'mO','linewidth', 3.0)
+%     plot(time(tfo(:,i)),Paw(tfo(:,i),i),'mO','linewidth', 3.0)
+% %     legend ('Original P_a_w','SCM P_a_w','Gaussian P_a_w','G -no effort P_a_w','Press.recon P_a_w','t_s','t_f','Location','southeast')
+%     text = [ sprintf('  E_s_c_m = %0.0f,', ParamN(1)) sprintf('  R_s_c_m = %0.0f,', ParamN(2)) sprintf('  E_R_e_c = %0.0f,', Param_Re(i,1)) sprintf('  R_R_e_c = %0.0f,', Param_Re(i,2)) sprintf('  E_G_-_n_e_w = %0.0f,', C_lsq_New(i,1)) sprintf('  R_G_-_n_e_w = %0.0f,', C_lsq_New(i,2) ) sprintf('  E_G_-_o_l_d = %0.0f,', E_Gauss_Old) sprintf('  R_G_-_o_l_d = %0.0f,', R_Gauss_Old) ];
+%     title(text)
+%     legend ('Original P_a_w','SCM P_a_w','Gaussian P_a_w','Gaussian Old P_a_w','t_s','t_f','Location','southeast')
+% end
+
+for i = 1:Bn
+    figure(2)
+    hold on
+    plot(time(:,i),Paw(:,i),'b+-','linewidth', 1.0)
+    plot(time(:,i),P_Cal(:,i), 'r*-','linewidth', 1.0)
+    plot(time(:,i),PawM_lsq_Old(:,i), ':','linewidth', 3.0)
+
+%     plot(time(:,i),PawM_lsq_noeffort(:,i), '^-','linewidth', 1.0)
+%     plot(time(:,i),Paw_reconst(:,i), ':','linewidth', 3.0)
+    
+    xlabel('Time [s]','FontWeight','Bold','FontSize',16)
+    ylabel('Pressure [cmH_2O]','FontWeight','Bold','FontSize',16)
+    set(gca,'fontsize',14)
+    grid on
+    plot(time(tso(:,i)),Paw(tso(:,i),i),'mO','linewidth', 3.0)
+    plot(time(tfo(:,i)),Paw(tfo(:,i),i),'mO','linewidth', 3.0)
+%     legend ('Original P_a_w','SCM P_a_w','Gaussian P_a_w','G -no effort P_a_w','Press.recon P_a_w','t_s','t_f','Location','southeast')
+    text = [ sprintf('  E_s_c_m = %0.0f,', ParamN(1)) sprintf('  R_s_c_m = %0.0f,', ParamN(2)),  sprintf('  E_G = %0.0f,', E_Gauss_Old) sprintf('  R_G = %0.0f,', R_Gauss_Old) ];
+    title(text)
+    legend ('Original P_a_w','SCM P_a_w','Gaussian P_a_w','t_s','t_f','Location','southeast')
+end
+
+prctile(A1,[25 50 75])
+prctile(A2,[25 50 75])
+prctile(A3,[25 50 75])
+
+% figure
+% [hAx,hLine1,hLine2] = plotyy(A1,A2,A1,A3);
+% hLine1.MarkerStyle = '*';
+% hLine2.MarkerStyle = '*';
+% xlabel('A1','FontWeight','Bold','FontSize',16)
+% ylabel('A2','FontWeight','Bold','FontSize',16)
+
+% figure
+% % yyaxis left
+% plot(A1,A2,'*')
+% xlabel('A1','FontWeight','Bold','FontSize',16)
+% ylabel('A2','FontWeight','Bold','FontSize',16)
+% set(gca,'fontsize',16) 
+% grid on
+% % ylim([-15 15])
+% ylim([-100 100])
+% xlim([0 100])
+% % yyaxis right
+% figure
+% plot(A1,A3,'*')
+% ylim([-100 100])
+% xlim([0 100])
+% xlabel('A1','FontWeight','Bold','FontSize',16)
+% ylabel('A3','FontWeight','Bold','FontSize',16)
+% set(gca,'fontsize',16) 
+% grid on
+
+
